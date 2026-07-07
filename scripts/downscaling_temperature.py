@@ -700,10 +700,18 @@ def visualisation_avril_2020(modele):
         ['nom', 'lat', 'lon']
     ].drop_duplicates()
     
+    # Reduire la taille pour visualisation (downsample x10)
+    # Le raster 30m est trop gros pour matplotlib
+    factor = 10
+    chelsa_viz = chelsa_data[::factor, ::factor]
+    rf_viz = rf_t[::factor, ::factor]
+    print(f"   Downsampling x{factor} pour visualisation")
+    print(f"   Nouvelle shape : {rf_viz.shape}")
+    
     # Echelle commune
     all_vals = np.concatenate([
-        chelsa_data[~np.isnan(chelsa_data)].ravel(),
-        rf_t[~np.isnan(rf_t)].ravel()
+        chelsa_viz[~np.isnan(chelsa_viz)].ravel(),
+        rf_viz[~np.isnan(rf_viz)].ravel()
     ])
     vmin = np.percentile(all_vals, 2)
     vmax = np.percentile(all_vals, 98)
@@ -711,12 +719,12 @@ def visualisation_avril_2020(modele):
     # Figure
     fig, axes = plt.subplots(1, 2, figsize=(20, 8), sharex=True, sharey=True)
     
-    cmap = cm.get_cmap('RdYlBu_r').copy()
+    cmap = plt.get_cmap('RdYlBu_r').copy()
     cmap.set_bad(color='lightgray', alpha=0.5)
     
     # AVANT - CHELSA 30m
     ax1 = axes[0]
-    im1 = ax1.imshow(np.ma.masked_invalid(chelsa_data), cmap=cmap,
+    im1 = ax1.imshow(np.ma.masked_invalid(chelsa_viz), cmap=cmap,
                       extent=extent, origin='upper',
                       vmin=vmin, vmax=vmax, interpolation='nearest')
     ax1.set_title(f'AVANT - CHELSA 1km resample a 30m\nAvril {ANNEE}',
@@ -724,7 +732,7 @@ def visualisation_avril_2020(modele):
     
     # APRES - RF 30m
     ax2 = axes[1]
-    im2 = ax2.imshow(np.ma.masked_invalid(rf_t), cmap=cmap,
+    im2 = ax2.imshow(np.ma.masked_invalid(rf_viz), cmap=cmap,
                       extent=extent, origin='upper',
                       vmin=vmin, vmax=vmax, interpolation='nearest')
     ax2.set_title(f'APRES - Downscaling Random Forest 30m\nAvril {ANNEE}',
