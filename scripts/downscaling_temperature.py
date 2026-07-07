@@ -573,10 +573,199 @@ def pipeline_downscaling():
 
 
 # ═══════════════════════════════════════════════════════════════
-# 11. LANCEMENT DU SCRIPT
+# 11. VISUALISATION AVANT / APRÈS - AVRIL 2020
+# ═══════════════════════════════════════════════════════════════
+
+def visualisation_avril_2020(modele):
+    """
+    Visualise le downscaling pour avril 2020.
+    
+    Affiche 2 cartes cote a cote :
+    - AVANT : CHELSA 1km resample a 30m (interpolation)
+    - APRES : Downscaling Random Forest 30m
+    
+    Sauvegarde egalement le raster T_RF_30m et la figure.
+    
+    Parameters
+    ----------
+    modele : RandomForestRegressor
+        Modele entraine
+    """
+    import matplotlib.cm as cm
+    
+    ANNEE = 2020
+    MOIS = 4
+    CHUNK_SIZE = 500
+    
+    # Dossiers
+    DOSSIER_CHELSA_RASTERS = Path("/content/drive/MyDrive/Colab Notebooks/dataStage/downscaling_25m")
+    DOSSIER_RASTERS = DOSSIER_OUTPUT / "rasters_30m"
+    DOSSIER_RASTERS.mkdir(exist_ok=True)
+    
+    print("=" * 70)
+    print(f"  VISUALISATION AVANT/APRES - AVRIL {ANNEE}")
+    print("=" * 70)
+    
+    # --- Etape 1 : Chargement rasters ---
+    print("\nEtape 1 : Chargement rasters")
+    print("-" * 60)
+    
+    with rasterio.open(FICHIER_MNT) as src:
+        mnt_data = src.read(1)
+    
+    fichier_chelsa = DOSSIER_CHELSA_RASTERS / f"T_CHELSA_30m_Delphinium_{ANNEE}{MOIS:02d}.tif"
+    with rasterio.open(fichier_chelsa) as src:
+        chelsa_data = src.read(1)
+        profile = src.profile.copy()
+        bounds = src.bounds
+        extent = [bounds.left, bounds.right, bounds.bottom, bounds.top]
+    
+    print(f"   MNT shape : {mnt_data.shape}")
+    print(f"   CHELSA shape : {chelsa_data.shape}")
+    
+    # --- Etape 2 : Prediction par blocs ---
+    print(f"\nEtape 2 : Prediction par blocs (chunk={CHUNK_SIZE})")
+    print("-" * 60)
+    
+    h, w = chelsa_data.shape
+    rf_t = np.full((h, w), np.nan, dtype=np.float32)
+    
+    mois_sin = np.sin(2 * np.pi * MOIS / 12)
+    mois_cos = np.cos(2 * np.pi * MOIS / 12)
+    
+    n_blocks_total = ((h + CHUNK_SIZE - 1) // CHUNK_SIZE) * \
+                     ((w + CHUNK_SIZE - 1) // CHUNK_SIZE)
+    n_done = 0
+    
+    for i in range(0, h, CHUNK_SIZE):
+        for j in range(0, w, CHUNK_SIZE):
+            n_done += 1
+            i_end = min(i + CHUNK_SIZE, h)
+            j_end = min(j + CHUNK_SIZE, w)
+            
+            chelsa_chunk = chelsa_data[i:i_end, j:j_end].ravel()
+            mnt_chunk = mnt_data[i:i_end, j:j_end].ravel()
+            
+            mask = (~np.isnan(chelsa_chunk)) & (~np.isnan(mnt_chunk))
+            
+            if mask.sum() == 0:
+                continue
+            
+            n_valid = mask.sum()
+            features = np.zeros((n_valid, 5), dtype=np.float32)
+            features[:, 0] = chelsa_chunk[mask]
+            features[:, 1] = 0
+            features[:, 2] = mnt_chunk[mask]
+            features[:, 3] = mois_sin
+            features[:, 4] = mois_cos
+            
+            predictions = modele.predict(features)
+            
+            chunk_pred = np.full_like(chelsa_chunk, np.nan)
+            chunk_pred[mask] = predictions
+            rf_t[i:i_end, j:j_end] = chunk_pred.reshape((i_end - i, j_end - j))
+            
+            if n_done % 50 == 0:
+                print(f"   Bloc {n_done}/{n_blocks_total}")
+    
+    print(f"   Termine : {n_done} blocs traites")
+    
+    # --- Etape 3 : Sauvegarde raster ---
+    print("\nEtape 3 : Sauvegarde raster")
+    print("-" * 60)
+    
+    fichier_sortie = DOSSIER_RASTERS / f"T_RF_30m_Delphinium_{ANNEE}{MOIS:02d}.tif"
+    profile.update(dtype='float32', count=1, compress='lzw')
+    
+    with rasterio.open(fichier_sortie, 'w', **profile) as dst:
+        dst.write(rf_t.astype('float32'), 1)
+    
+    n_valid = (~np.isnan(rf_t)).sum()
+    t_moy = np.nanmean(rf_t)
+    t_min = np.nanmin(rf_t)
+    t_max = np.nanmax(rf_t)
+    
+    print(f"   T moyenne : {t_moy:+.2f} deg C")
+    print(f"   T range : [{t_min:.1f}, {t_max:.1f}] deg C")
+    print(f"   Pixels valides : {n_valid:,}")
+    print(f"   Sauvegarde : {fichier_sortie.name}")
+    
+    # --- Etape 4 : Visualisation ---
+    print("\nEtape 4 : Visualisation avant/apres")
+    print("-" * 60)
+    
+    # Sites Delphinium
+    df_chelsa = pd.read_csv(FICHIER_CHELSA_POINTS)
+    sites = df_chelsa[df_chelsa['type'] == 'SITE'][
+        ['nom', 'lat', 'lon']
+    ].drop_duplicates()
+    
+    # Echelle commune
+    all_vals = np.concatenate([
+        chelsa_data[~np.isnan(chelsa_data)].ravel(),
+        rf_t[~np.isnan(rf_t)].ravel()
+    ])
+    vmin = np.percentile(all_vals, 2)
+    vmax = np.percentile(all_vals, 98)
+    
+    # Figure
+    fig, axes = plt.subplots(1, 2, figsize=(20, 8), sharex=True, sharey=True)
+    
+    cmap = cm.get_cmap('RdYlBu_r').copy()
+    cmap.set_bad(color='lightgray', alpha=0.5)
+    
+    # AVANT - CHELSA 30m
+    ax1 = axes[0]
+    im1 = ax1.imshow(np.ma.masked_invalid(chelsa_data), cmap=cmap,
+                      extent=extent, origin='upper',
+                      vmin=vmin, vmax=vmax, interpolation='nearest')
+    ax1.set_title(f'AVANT - CHELSA 1km resample a 30m\nAvril {ANNEE}',
+                    fontsize=14, fontweight='bold')
+    
+    # APRES - RF 30m
+    ax2 = axes[1]
+    im2 = ax2.imshow(np.ma.masked_invalid(rf_t), cmap=cmap,
+                      extent=extent, origin='upper',
+                      vmin=vmin, vmax=vmax, interpolation='nearest')
+    ax2.set_title(f'APRES - Downscaling Random Forest 30m\nAvril {ANNEE}',
+                    fontsize=14, fontweight='bold')
+    
+    # Sites Delphinium
+    for ax in [ax1, ax2]:
+        for _, row in sites.iterrows():
+            couleur = '#27AE60' if row['nom'] == 'NOHEDES' else '#9B59B6'
+            ax.scatter(row['lon'], row['lat'], s=150, marker='*',
+                        c=couleur, edgecolor='black', linewidth=1.5, zorder=10)
+        ax.set_xlabel('Longitude')
+        ax.set_ylabel('Latitude')
+        ax.grid(alpha=0.3, linestyle=':')
+    
+    # Colorbar unique
+    fig.subplots_adjust(right=0.9)
+    cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
+    cbar = fig.colorbar(im2, cax=cbar_ax, label='Temperature (deg C)')
+    
+    plt.suptitle(f'Downscaling Temperature - Comparaison avant/apres',
+                  fontsize=16, fontweight='bold')
+    
+    chemin_fig = DOSSIER_OUTPUT / f"comparaison_avant_apres_{ANNEE}{MOIS:02d}.png"
+    fig.savefig(chemin_fig, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.show()
+    
+    print(f"   Figure sauvegardee : {chemin_fig.name}")
+    print("\n" + "=" * 70)
+    print("  VISUALISATION TERMINEE")
+    print("=" * 70)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 12. LANCEMENT DU SCRIPT
 # ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     modele, metriques, importance, sites = pipeline_downscaling()
+    
+    # Visualisation avant/apres pour avril 2020
+    visualisation_avril_2020(modele)
     
     print("\nPipeline termine avec succes")
