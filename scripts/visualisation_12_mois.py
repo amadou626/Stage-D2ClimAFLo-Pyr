@@ -73,7 +73,7 @@ FICHIER_CHELSA_POINTS = DOSSIER_DATA / "chelsa_par_point_complet.csv"
 # Donnees Drive (trop volumineuses pour GitHub)
 DOSSIER_DRIVE = Path("/content/drive/MyDrive/Colab Notebooks/dataStage")
 DOSSIER_CHELSA_RASTERS = DOSSIER_DRIVE / "downscaling_25m"
-FICHIER_MNT_DELPHINIUM = DOSSIER_CHELSA_RASTERS / "MNT_30m_Delphinium.tif"
+FICHIER_MNT_DELPHINIUM = DOSSIER_DRIVE / "MNT" / "MNT_30m_Delphinium.tif"
 
 # Sorties
 DOSSIER_OUTPUT = RACINE_PROJET / "outputs"
